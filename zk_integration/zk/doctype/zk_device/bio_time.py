@@ -154,7 +154,7 @@ def fetch_next_data(method_url,headers,json={},params={}):
     except:
         pass
     
-    if response.status_code == 200:
+    if response.status_code == 1000:
         data = json_response.get("data") or []
         next_t = json_response.get("next")
         if next_t:

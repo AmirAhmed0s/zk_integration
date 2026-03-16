@@ -70,15 +70,18 @@ class ZKDevice(Document):
 					# log.status = log.status.upper()
 					name = "{}-{}-{}".format(log.user_id,
 												log.timestamp, log.status)
-					sql = """
-					insert Into `tabDevice Log` 
-					(name,employee,enroll_no,time,date,type,punch,creation,modified , owner , device) 
-					values 
-					('{}',(select name from tabEmployee where attendance_device_id = '{}' limit 1),'{}','{}','{}','{}','{}',CURRENT_TIMESTAMP(),CURRENT_TIMESTAMP() , '{}','{}')
-					""".format(name, log.user_id, log.user_id, log.timestamp, log.timestamp.date(), log.status, log.punch, frappe.session.user, self.name)
-					# frappe.msgprint(sql)
-
-					frappe.db.sql(sql)
+					frappe.db.sql("""
+					INSERT IGNORE INTO `tabDevice Log`
+					(name, employee, enroll_no, time, date, type, punch,
+					 creation, modified, owner, device)
+					VALUES
+					(%s,
+					 (SELECT name FROM tabEmployee WHERE attendance_device_id = %s LIMIT 1),
+					 %s, %s, %s, %s, %s,
+					 CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), %s, %s)
+					""", (name, log.user_id, log.user_id, log.timestamp,
+						  log.timestamp.date(), log.status, log.punch,
+						  frappe.session.user, self.name))
 					last_log_users[log.user_id] = parser.parse(
 						str(log.timestamp))
 					# last_log_users [log.user_id] = datetime.strptime(str(log.timestamp),DATETIME_FORMAT)
@@ -118,14 +121,13 @@ class ZKDevice(Document):
 				self.last_log_row = parser.parse(str(self.last_log_row))
     
 			logs = get_device_transactions(serial=self.serial_no , last_log = self.last_log_row , fetch_next=fetch_next) or []
-			last_log_users = {}
 			period = self.period or 0
 			count = 1
 			total = len(logs)
 			if not total:
 				frappe.throw(_("Empty Logs"))
-				# self.last_log_row = datetime.strptime(str(self.last_log_row),DATETIME_FORMAT)
 			last = self.last_log_row
+			last_log_users = {}
 			for log in logs:
 				log = frappe._dict(log)
 				if show_progress:
@@ -133,39 +135,36 @@ class ZKDevice(Document):
 						count * 100 / total, title=_("Getting Logs..."))
 				count += 1
 				log.timestamp = parser.parse(str(log.punch_time))
-				log.status = log.punch_state == "0"
 				log.user_id = log.emp_code
 				log.punch = log.punch_state
-    
+				log.status = 'IN' if str(log.punch_state) == "0" else 'OUT'
+
 				if self.last_log_row and (log.timestamp < self.last_log_row):
 					continue
-				# last_timestamp = last_log_users.get(log.user_id) or None
-				# if period and last_timestamp:
-				# 	diff = (log.timestamp - last_timestamp).seconds / 3600
-				# 	if diff < period:
-				# 		continue
+
+				last_timestamp = last_log_users.get(log.user_id) or None
+				if period and last_timestamp:
+					diff = (log.timestamp - last_timestamp).seconds / 3600
+					if diff < period:
+						continue
 
 				try:
-					# if True:
-					# frappe.msgprint(str(log))
-					log.status = 'IN' if log.status == 0 else 'OUT'
-
-					# log.status = log.status.upper()
 					name = "{}-{}-{}".format(log.user_id,
 												log.timestamp, log.status)
-					sql = """
-					insert Into `tabDevice Log` 
-					(name,employee,enroll_no,time,date,type,punch,creation,modified , owner , device) 
-					values 
-					('{}',(select name from tabEmployee where attendance_device_id = '{}' limit 1),'{}','{}','{}','{}','{}',CURRENT_TIMESTAMP(),CURRENT_TIMESTAMP() , '{}','{}')
-					""".format(name, log.user_id, log.user_id, log.timestamp, log.timestamp.date(), log.status, log.punch, frappe.session.user, self.name)
-					# frappe.msgprint(sql)
-
-					frappe.db.sql(sql)
-					last_log_users[log.user_id] = parser.parse(
-						str(log.timestamp))
-					# last_log_users [log.user_id] = datetime.strptime(str(log.timestamp),DATETIME_FORMAT)
-				except:
+					frappe.db.sql("""
+					INSERT IGNORE INTO `tabDevice Log`
+					(name, employee, enroll_no, time, date, type, punch,
+					 creation, modified, owner, device)
+					VALUES
+					(%s,
+					 (SELECT name FROM tabEmployee WHERE attendance_device_id = %s LIMIT 1),
+					 %s, %s, %s, %s, %s,
+					 CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), %s, %s)
+					""", (name, log.user_id, log.user_id, log.timestamp,
+						  log.timestamp.date(), log.status, log.punch,
+						  frappe.session.user, self.name))
+					last_log_users[log.user_id] = log.timestamp
+				except Exception:
 					pass
 				last = log.timestamp
 			if last:
@@ -234,27 +233,39 @@ device_bio_map = {
 @frappe.whitelist()
 def get_biotime_device_list():
 	devices = get_devices_data() or []
-	# frappe.msgprint(str(len(devices)))
+	count = 0
 	for device_data in devices:
 		device_data = frappe._dict(device_data)
-		# frappe.msgprint(device_data.sn)
+		if not device_data.get("sn"):
+			continue
+
 		exist = frappe.db.exists("ZK Device", {
 			"serial_no": device_data.get("sn")
-		}, 'name')
-		
-		if exist:
-			device = frappe.get_doc("ZK Device", exist)
-		else:
-			device = frappe.new_doc("ZK Device")
+		})
 
-		for k,v in device_bio_map.items() :
-			setattr(device , v , device_data.get(k))
+		try:
+			if exist:
+				device = frappe.get_doc("ZK Device", exist)
+			else:
+				device = frappe.new_doc("ZK Device")
 
-		if not exist :
-			device.device_name = f"{device.alias} - {device.serial_no}"
-			device.get_data_type = "BioTime"
-			# device.active = 0
-			# device.password = 0
-			# device.period = 5
-			# device.port = 4370
-		device.save()
+			for k, v in device_bio_map.items():
+				setattr(device, v, device_data.get(k))
+
+			if not exist:
+				device.device_name = "{} - {}".format(
+					device.alias or "Device",
+					device.serial_no)
+				device.get_data_type = "BioTime"
+			device.save()
+			count += 1
+		except Exception as e:
+			frappe.log_error(
+				_("Failed to save BioTime device {0}: {1}").format(
+					device_data.get("sn"), str(e)),
+				"BioTime Device Sync")
+
+	frappe.db.commit()
+	frappe.msgprint(
+		_("{0} device(s) fetched and synced from BioTime.").format(count),
+		indicator="green")

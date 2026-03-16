@@ -33,7 +33,7 @@
   },
   {
    "fieldname": "pwd",
-   "fieldtype": "Data",
+   "fieldtype": "Password",
    "label": "PWD",
    "reqd": 1
   },
